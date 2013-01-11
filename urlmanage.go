@@ -80,7 +80,13 @@ func (u *UrlManage) Cache() bool {
 
 func (u *UrlManage) SetCache(cache bool) {
 	u.mutex.Lock()
-	u.mustMatch = cache
+	u.mustMatch = !cache
+	u.mutex.Unlock()
+}
+
+func (u *UrlManage) RefreshCache() {
+	u.mutex.Lock()
+	u.urlCache = map[string]string{}
 	u.mutex.Unlock()
 }
 
@@ -245,13 +251,17 @@ func (u *UrlManage) AddRule(r string) {
 func (u *UrlManage) ReWrite(rw http.ResponseWriter, req *http.Request) string {
 	u.mutex.RLock()
 	manage := u.manage
-	cache := u.mustMatch
+	cache := !u.mustMatch
 	u.mutex.RUnlock()
 	if !manage {
 		return req.URL.String()
 	}
 
-	if !u.mustMatch {
+	if cache {
+		if u.urlCache == nil {
+			u.urlCache = map[string]string{}
+		}
+
 		if to, ok := u.urlCache[req.URL.String()]; ok {
 			return to
 		}
