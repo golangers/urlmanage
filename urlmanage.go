@@ -63,13 +63,25 @@ type rule struct {
 }
 
 type UrlManage struct {
-	manage bool
-	rules  []rule
-	mutex  sync.RWMutex
+	manage    bool
+	mustMatch bool
+	rules     []rule
+	mutex     sync.RWMutex
+	urlCache  map[string]string
 }
 
 func New() *UrlManage {
 	return &UrlManage{}
+}
+
+func (u *UrlManage) Cache() bool {
+	return u.mustMatch
+}
+
+func (u *UrlManage) SetCache(cache bool) {
+	u.mutex.Lock()
+	u.mustMatch = cache
+	u.mutex.Unlock()
 }
 
 func (u *UrlManage) Manage() bool {
@@ -112,11 +124,16 @@ func (u *UrlManage) addRule(expr, replace string, flags ...flag) {
 }
 
 func (u *UrlManage) doRule(rw http.ResponseWriter, req *http.Request) string {
-	in := req.URL.Path
-	out := in
+	var match bool
+	var out string
+
+	reqUrl := req.URL
+	in := reqUrl.Path
+
 	u.mutex.RLock()
 	lrs := len(u.rules)
 	u.mutex.RUnlock()
+
 RESTART:
 	for i := 0; i < lrs; i++ {
 		u.mutex.RLock()
@@ -162,6 +179,10 @@ RESTART:
 
 		out = ur.regexp.ReplaceAllString(in, ur.replace)
 
+		if out != in {
+			match = true
+		}
+
 		if queryStringAppend {
 			if strings.Contains(out, "?") {
 				out += "&"
@@ -169,7 +190,7 @@ RESTART:
 				out += "?"
 			}
 
-			out += req.URL.RawQuery
+			out += reqUrl.RawQuery
 		}
 
 		if redirect {
@@ -188,6 +209,16 @@ RESTART:
 
 		if last {
 			break
+		}
+	}
+
+	if !match {
+		return reqUrl.String()
+	} else {
+		if !u.mustMatch {
+			u.mutex.Lock()
+			u.urlCache[reqUrl.String()] = out
+			u.mutex.Unlock()
 		}
 	}
 
@@ -212,15 +243,21 @@ func (u *UrlManage) AddRule(r string) {
 }
 
 func (u *UrlManage) ReWrite(rw http.ResponseWriter, req *http.Request) string {
-	out := req.URL.String()
 	u.mutex.RLock()
 	manage := u.manage
+	cache := u.mustMatch
 	u.mutex.RUnlock()
-	if manage {
-		out = u.doRule(rw, req)
+	if !manage {
+		return req.URL.String()
 	}
 
-	return out
+	if !u.mustMatch {
+		if to, ok := u.urlCache[req.URL.String()]; ok {
+			return to
+		}
+	}
+
+	return u.doRule(rw, req)
 }
 
 func (u *UrlManage) LoadRule(rules string, reload bool) {
